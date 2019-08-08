@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 
-namespace ConcurrentDictionaryLazy
+namespace Dao.ConcurrentDictionaryLazy
 {
     public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>
     {

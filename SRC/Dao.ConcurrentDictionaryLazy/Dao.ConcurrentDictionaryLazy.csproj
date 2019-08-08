@@ -13,7 +13,7 @@
     <Company>Oscar Koo</Company>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Version>1.0.1.0</Version>
-    <PackageId>ConcurrentDictionaryLazy</PackageId>
+    <PackageId>Dao.ConcurrentDictionaryLazy</PackageId>
   </PropertyGroup>
 
 </Project>

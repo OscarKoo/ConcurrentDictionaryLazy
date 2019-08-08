@@ -126,7 +126,7 @@ namespace Dao.ConcurrentDictionaryLazy
 
         bool ICollection<KeyValuePair<TKey, TValue>>.Remove(KeyValuePair<TKey, TValue> item)
         {
-            return ((IDictionary<TKey, TValue>)this).Remove(item.Key);
+            return Remove(item.Key);
         }
 
         public int Count => this.dictionary.Count;
@@ -235,7 +235,7 @@ namespace Dao.ConcurrentDictionaryLazy
         /// </summary>
         public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory)
         {
-            return this.dictionary.AddOrUpdate(key, NewValue(key, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
+            return this.dictionary.AddOrUpdate(key, k => NewValue(k, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
         }
 
         /// <summary>
@@ -251,7 +251,7 @@ namespace Dao.ConcurrentDictionaryLazy
         /// </summary>
         public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Action<TKey, TValue> updateValueFactory)
         {
-            return this.dictionary.AddOrUpdate(key, NewValue(key, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
+            return this.dictionary.AddOrUpdate(key, k => NewValue(k, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
         }
 
         public KeyValuePair<TKey, TValue>[] ToArray()

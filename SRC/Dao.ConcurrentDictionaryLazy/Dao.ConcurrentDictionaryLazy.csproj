@@ -12,7 +12,7 @@
     <PackageReleaseNotes>Visit the project's url to see the Release Notes</PackageReleaseNotes>
     <Company>Oscar Koo</Company>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Version>1.0.1.0</Version>
+    <Version>1.0.2.0</Version>
     <PackageId>Dao.ConcurrentDictionaryLazy</PackageId>
   </PropertyGroup>
 

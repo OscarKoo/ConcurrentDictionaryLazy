@@ -2,6 +2,17 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard1.1</TargetFramework>
+    <Authors>Oscar Koo</Authors>
+    <Description>A thread-safe, run-once, lazy-loaded ConcurrentDictionary</Description>
+    <Copyright>Copyright 2019 Oscar Koo</Copyright>
+    <PackageLicenseUrl>https://github.com/OscarKoo/ConcurrentDictionaryLazy/blob/master/LICENSE</PackageLicenseUrl>
+    <PackageProjectUrl>https://github.com/OscarKoo/ConcurrentDictionaryLazy</PackageProjectUrl>
+    <PackageIconUrl>https://raw.githubusercontent.com/OscarKoo/ConcurrentDictionaryLazy/master/favicon.ico</PackageIconUrl>
+    <PackageTags>thread-safe run-once lazy-loaded ConcurrentDictionary lazy</PackageTags>
+    <PackageReleaseNotes>Visit the project's url to see the Release Notes</PackageReleaseNotes>
+    <Company>Oscar Koo</Company>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Version>1.0.0.0</Version>
   </PropertyGroup>
 
 </Project>

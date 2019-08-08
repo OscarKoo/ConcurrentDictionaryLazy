@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.28307.757
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConcurrentDictionaryLazy", "ConcurrentDictionaryLazy\ConcurrentDictionaryLazy.csproj", "{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ConcurrentDictionaryLazy", "ConcurrentDictionaryLazy\ConcurrentDictionaryLazy.csproj", "{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

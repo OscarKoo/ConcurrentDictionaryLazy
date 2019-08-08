@@ -41,9 +41,9 @@ namespace ConcurrentDictionaryLazy
             this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, capacity, comparer ?? defaultComparer);
         }
 
-        IEnumerable<KeyValuePair<TKey, Lazy<TValue>>> ConvertToLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection)
+        static IEnumerable<KeyValuePair<TKey, Lazy<TValue>>> ConvertToLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection)
         {
-            return collection.Select(s => new KeyValuePair<TKey, Lazy<TValue>>(s.Key, new Lazy<TValue>(() => s.Value)));
+            return collection.Select(s => new KeyValuePair<TKey, Lazy<TValue>>(s.Key, NewValue(s.Value)));
         }
 
         #endregion
@@ -126,7 +126,7 @@ namespace ConcurrentDictionaryLazy
 
         bool ICollection<KeyValuePair<TKey, TValue>>.Remove(KeyValuePair<TKey, TValue> item)
         {
-            return ((ICollection<KeyValuePair<TKey, Lazy<TValue>>>)this.dictionary).Remove(new KeyValuePair<TKey, Lazy<TValue>>(item.Key, NewValue(item.Value)));
+            return ((IDictionary<TKey, TValue>)this).Remove(item.Key);
         }
 
         public int Count => this.dictionary.Count;
@@ -143,7 +143,7 @@ namespace ConcurrentDictionaryLazy
             return this.dictionary.ContainsKey(key);
         }
 
-        bool IDictionary<TKey, TValue>.Remove(TKey key)
+        public bool Remove(TKey key)
         {
             return ((IDictionary<TKey, Lazy<TValue>>)this.dictionary).Remove(key);
         }
@@ -252,6 +252,11 @@ namespace ConcurrentDictionaryLazy
         public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Action<TKey, TValue> updateValueFactory)
         {
             return this.dictionary.AddOrUpdate(key, NewValue(key, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
+        }
+
+        public KeyValuePair<TKey, TValue>[] ToArray()
+        {
+            return this.dictionary.ToArray().Select(s => new KeyValuePair<TKey, TValue>(s.Key, s.Value.Value)).ToArray();
         }
     }
 }

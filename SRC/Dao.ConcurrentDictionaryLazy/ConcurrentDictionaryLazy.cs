@@ -7,6 +7,7 @@ using System.Linq;
 
 namespace Dao.ConcurrentDictionaryLazy
 {
+    [Serializable]
     public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>
     {
         static readonly int processCount = Environment.ProcessorCount;

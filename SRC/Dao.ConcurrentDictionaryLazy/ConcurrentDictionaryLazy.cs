@@ -8,7 +8,7 @@ using System.Linq;
 namespace Dao.ConcurrentDictionaryLazy
 {
     [Serializable]
-    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>
+    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>
     {
         static readonly int processCount = Environment.ProcessorCount;
         static readonly IEqualityComparer<TKey> defaultComparer = EqualityComparer<TKey>.Default;
@@ -84,7 +84,7 @@ namespace Dao.ConcurrentDictionaryLazy
             return value == null ? default(TValue) : value.Value;
         }
 
-        #region IDictionary
+        #region IDictionary<TKey, TValue>
 
         public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
         {
@@ -116,8 +116,19 @@ namespace Dao.ConcurrentDictionaryLazy
 
         void ICollection<KeyValuePair<TKey, TValue>>.CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex)
         {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+
             var items = new KeyValuePair<TKey, Lazy<TValue>>[array.Length];
+
+            for (var i = arrayIndex; i < array.Length; i++)
+            {
+                var current = array[i];
+                items[i] = new KeyValuePair<TKey, Lazy<TValue>>(current.Key, NewValue(current.Value));
+            }
+
             ((ICollection<KeyValuePair<TKey, Lazy<TValue>>>)this.dictionary).CopyTo(items, arrayIndex);
+
             for (var i = arrayIndex; i < items.Length; i++)
             {
                 var current = items[i];
@@ -158,7 +169,7 @@ namespace Dao.ConcurrentDictionaryLazy
 
         public TValue this[TKey key]
         {
-            get => CheckValue(this.dictionary[key]);
+            get => this.dictionary[key].Value;
             set => this.dictionary[key] = NewValue(value);
         }
 
@@ -259,5 +270,199 @@ namespace Dao.ConcurrentDictionaryLazy
         {
             return this.dictionary.ToArray().Select(s => new KeyValuePair<TKey, TValue>(s.Key, s.Value.Value)).ToArray();
         }
+
+        #region DictionaryEnumerator
+
+        sealed class DictionaryEnumerator : IDictionaryEnumerator, IEnumerator
+        {
+            readonly IEnumerator<KeyValuePair<TKey, TValue>> enumerator;
+
+            internal DictionaryEnumerator(ConcurrentDictionaryLazy<TKey, TValue> dictionary)
+            {
+                this.enumerator = dictionary.GetEnumerator();
+            }
+
+            public DictionaryEntry Entry
+            {
+                get
+                {
+                    var current = this.enumerator.Current;
+                    var key = (object)current.Key;
+                    current = this.enumerator.Current;
+                    var local = (object)current.Value;
+                    return new DictionaryEntry(key, local);
+                }
+            }
+
+            public object Key => this.enumerator.Current.Key;
+
+            public object Value => this.enumerator.Current.Value;
+
+            public object Current => Entry;
+
+            public bool MoveNext()
+            {
+                return this.enumerator.MoveNext();
+            }
+
+            public void Reset()
+            {
+                this.enumerator.Reset();
+            }
+        }
+
+        #endregion
+
+        #region Boxed
+
+        sealed class Boxed<T>
+        {
+            internal Boxed(T value)
+            {
+                Value = value;
+            }
+
+            public T Value { get; }
+        }
+
+        #endregion
+
+        #region IDictionary
+
+        bool IDictionary.Contains(object key)
+        {
+            return ((IDictionary)this.dictionary).Contains(key);
+        }
+
+        IDictionaryEnumerator IDictionary.GetEnumerator()
+        {
+            return new DictionaryEnumerator(this);
+        }
+
+        void IDictionary.Remove(object key)
+        {
+            ((IDictionary)this.dictionary).Remove(key);
+        }
+
+        bool IDictionary.IsFixedSize => ((IDictionary)this.dictionary).IsFixedSize;
+
+        bool IDictionary.IsReadOnly => ((IDictionary)this.dictionary).IsReadOnly;
+
+        object IDictionary.this[object key]
+        {
+            get => ((Lazy<TValue>)((IDictionary)this.dictionary)[key]).Value;
+            set => ((IDictionary)this.dictionary)[key] = NewValue((TValue)value);
+        }
+
+        void IDictionary.Add(object key, object value)
+        {
+            ((IDictionary)this.dictionary).Add(key, NewValue((TValue)value));
+        }
+
+        void ICollection.CopyTo(Array array, int index)
+        {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+
+            switch (array)
+            {
+                case KeyValuePair<TKey, TValue>[] array1: {
+                    var tmpArray = new KeyValuePair<TKey, Lazy<TValue>>[array.Length];
+
+                    for (var i = index; i < array1.Length; i++)
+                    {
+                        var current = array1[i];
+                        tmpArray[i] = new KeyValuePair<TKey, Lazy<TValue>>(current.Key, NewValue(current.Value));
+                    }
+
+                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
+
+                    for (var i = index; i < tmpArray.Length; i++)
+                    {
+                        var current = tmpArray[i];
+                        array1[i] = new KeyValuePair<TKey, TValue>(current.Key, current.Value.Value);
+                    }
+
+                    break;
+                }
+
+                case DictionaryEntry[] array2: {
+                    var tmpArray = new DictionaryEntry[array.Length];
+
+                    for (var i = index; i < array2.Length; i++)
+                    {
+                        var current = array2[i];
+                        tmpArray[i] = new DictionaryEntry(current.Key, new Boxed<object>(current.Value));
+                    }
+
+                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
+
+                    for (var i = index; i < tmpArray.Length; i++)
+                    {
+                        var current = tmpArray[i];
+                        switch (current.Value)
+                        {
+                            case Lazy<TValue> lazy:
+                                array2[i] = new DictionaryEntry(current.Key, lazy.Value);
+                                break;
+                            case Boxed<object> boxed:
+                                array2[i] = new DictionaryEntry(current.Key, boxed.Value);
+                                break;
+                        }
+                    }
+
+                    break;
+                }
+
+                default: {
+                    var array3 = array as object[];
+                    if (array3 == null)
+                        throw new ArgumentException($"Incorrect Type of {nameof(array)}");
+
+                    var tmpArray = new object[array.Length];
+
+                    for (var i = index; i < array3.Length; i++)
+                    {
+                        tmpArray[i] = new Boxed<object>(array3[i]);
+                    }
+
+                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
+
+                    for (var i = index; i < tmpArray.Length; i++)
+                    {
+                        var current = tmpArray[i];
+                        switch (current)
+                        {
+                            case KeyValuePair<TKey, Lazy<TValue>> pair:
+                                array3[i] = new KeyValuePair<TKey, TValue>(pair.Key, pair.Value.Value);
+                                break;
+                            case Boxed<object> boxed:
+                                array3[i] = boxed.Value;
+                                break;
+                        }
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        bool ICollection.IsSynchronized => ((ICollection)this.dictionary).IsSynchronized;
+
+        object ICollection.SyncRoot => ((ICollection)this.dictionary).SyncRoot;
+
+        ICollection IDictionary.Keys => (ICollection)Keys;
+
+        ICollection IDictionary.Values => (ICollection)Values;
+
+        #endregion
+
+        #region IReadOnlyDictionary<TKey, TValue>
+
+        IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => Keys;
+
+        IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => Values;
+
+        #endregion
     }
 }

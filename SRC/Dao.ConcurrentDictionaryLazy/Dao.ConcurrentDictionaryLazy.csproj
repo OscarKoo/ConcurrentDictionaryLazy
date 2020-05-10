@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>NETSTANDARD2.0;NET40;NET45;NETCOREAPP2.0;</TargetFrameworks>
+    <TargetFrameworks>NETSTANDARD2.0;NET45;NETCOREAPP2.0;</TargetFrameworks>
     <Authors>Oscar Koo</Authors>
     <Description>A thread-safe, run-once, lazy-loaded ConcurrentDictionary</Description>
     <Copyright>Copyright 2019 Oscar Koo</Copyright>
@@ -12,7 +12,7 @@
     <PackageReleaseNotes>Visit the project's url to see the Release Notes</PackageReleaseNotes>
     <Company>Oscar Koo</Company>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Version>1.1.0.0</Version>
+    <Version>1.2.0.0</Version>
     <PackageId>Dao.ConcurrentDictionaryLazy</PackageId>
   </PropertyGroup>
 

@@ -4,42 +4,39 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Dao.ConcurrentDictionaryLazy
 {
     [Serializable]
-    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>
+    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>, IDisposable
     {
         static readonly int processCount = Environment.ProcessorCount;
         static readonly IEqualityComparer<TKey> defaultComparer = EqualityComparer<TKey>.Default;
+        readonly IEqualityComparer<TKey> comparer;
 
         readonly ConcurrentDictionary<TKey, Lazy<TValue>> dictionary;
 
+        readonly object syncObj = new object();
+        ConcurrentDictionary<TKey, SemaphoreSlim> asyncLockers;
+
         #region Constructor
 
-        public ConcurrentDictionaryLazy()
-        {
-            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>();
-        }
+        public ConcurrentDictionaryLazy() : this(null) { }
 
-        public ConcurrentDictionaryLazy(IEqualityComparer<TKey> comparer)
-        {
-            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(comparer);
-        }
+        public ConcurrentDictionaryLazy(IEqualityComparer<TKey> comparer) : this(0, comparer: comparer) { }
 
-        public ConcurrentDictionaryLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null)
-        {
-            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(ConvertToLazy(collection), comparer ?? defaultComparer);
-        }
+        public ConcurrentDictionaryLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null) : this(0, collection, comparer) { }
 
         public ConcurrentDictionaryLazy(int concurrencyLevel, IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null)
         {
-            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel, ConvertToLazy(collection), comparer ?? defaultComparer);
+            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, ConvertToLazy(collection), this.comparer = comparer ?? defaultComparer);
         }
 
         public ConcurrentDictionaryLazy(int concurrencyLevel, int capacity = 31, IEqualityComparer<TKey> comparer = null)
         {
-            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, capacity, comparer ?? defaultComparer);
+            this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, capacity, this.comparer = comparer ?? defaultComparer);
         }
 
         static IEnumerable<KeyValuePair<TKey, Lazy<TValue>>> ConvertToLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection)
@@ -179,6 +176,20 @@ namespace Dao.ConcurrentDictionaryLazy
 
         #endregion
 
+        #region ThreadSafe
+
+        SemaphoreSlim GetLocker(TKey key)
+        {
+            if (this.asyncLockers == null)
+                lock (this.syncObj)
+                    if (this.asyncLockers == null)
+                        this.asyncLockers = new ConcurrentDictionary<TKey, SemaphoreSlim>(this.comparer);
+
+            return this.asyncLockers.GetOrAdd(key, k => new SemaphoreSlim(1, 1));
+        }
+
+        #endregion
+
         public bool TryAdd(TKey key, TValue value)
         {
             return this.dictionary.TryAdd(key, NewValue(value));
@@ -189,32 +200,44 @@ namespace Dao.ConcurrentDictionaryLazy
             return this.dictionary.TryAdd(key, NewValue(key, valueFactory));
         }
 
-        /// <summary>
-        /// Not thread-safe
-        /// </summary>
-        [Obsolete]
         public bool TryUpdate(TKey key, TValue newValue, TValue comparisonValue)
         {
-            if (!this.dictionary.TryGetValue(key, out var value)
-                || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
-                return false;
+            var locker = GetLocker(key);
+            locker.Wait();
 
-            this.dictionary[key] = NewValue(newValue);
-            return true;
+            try
+            {
+                if (!this.dictionary.TryGetValue(key, out var value)
+                    || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
+                    return false;
+
+                this.dictionary[key] = NewValue(newValue);
+                return true;
+            }
+            finally
+            {
+                locker.Release();
+            }
         }
 
-        /// <summary>
-        /// Not thread-safe
-        /// </summary>
-        [Obsolete]
         public bool TryUpdate(TKey key, Func<TKey, TValue> newValueFactory, TValue comparisonValue)
         {
-            if (!this.dictionary.TryGetValue(key, out var value)
-                || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
-                return false;
+            var locker = GetLocker(key);
+            locker.Wait();
 
-            this.dictionary[key] = NewValue(key, newValueFactory);
-            return true;
+            try
+            {
+                if (!this.dictionary.TryGetValue(key, out var value)
+                    || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
+                    return false;
+
+                this.dictionary[key] = NewValue(key, newValueFactory);
+                return true;
+            }
+            finally
+            {
+                locker.Release();
+            }
         }
 
         public bool TryRemove(TKey key, out TValue value)
@@ -232,6 +255,28 @@ namespace Dao.ConcurrentDictionaryLazy
         public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
         {
             return this.dictionary.GetOrAdd(key, k => NewValue(k, valueFactory)).Value;
+        }
+
+        public async Task<TValue> GetOrAddAsync(TKey key, Func<TKey, Task<TValue>> valueFactory)
+        {
+            var locker = GetLocker(key);
+            await locker.WaitAsync();
+
+            try
+            {
+                if (this.dictionary.TryGetValue(key, out var lazy))
+                    return lazy.Value;
+
+                if (valueFactory == null)
+                    throw new ArgumentNullException(nameof(valueFactory));
+
+                var value = await valueFactory(key);
+                return GetOrAdd(key, value);
+            }
+            finally
+            {
+                locker.Release();
+            }
         }
 
         /// <summary>
@@ -462,6 +507,51 @@ namespace Dao.ConcurrentDictionaryLazy
         IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => Keys;
 
         IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => Values;
+
+        #endregion
+
+        #region MyRegion
+
+        bool disposed;
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        void Dispose(bool disposing)
+        {
+            if (this.disposed)
+                return;
+
+            if (disposing)
+            {
+                if (this.asyncLockers != null)
+                {
+                    lock (this.syncObj)
+                    {
+                        if (this.asyncLockers != null)
+                        {
+                            var keys = this.asyncLockers.Keys;
+                            foreach (var key in keys)
+                            {
+                                if (!this.asyncLockers.TryGetValue(key, out var value))
+                                    continue;
+
+                                value.Dispose();
+                                ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
+                            }
+
+                            this.asyncLockers.Clear();
+                            this.asyncLockers = null;
+                        }
+                    }
+                }
+            }
+
+            this.disposed = true;
+        }
 
         #endregion
     }

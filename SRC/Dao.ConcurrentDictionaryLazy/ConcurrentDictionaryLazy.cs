@@ -104,6 +104,7 @@ namespace Dao.ConcurrentDictionaryLazy
         public void Clear()
         {
             this.dictionary.Clear();
+            ClearLockers();
         }
 
         bool ICollection<KeyValuePair<TKey, TValue>>.Contains(KeyValuePair<TKey, TValue> item)
@@ -154,7 +155,9 @@ namespace Dao.ConcurrentDictionaryLazy
 
         public bool Remove(TKey key)
         {
-            return ((IDictionary<TKey, Lazy<TValue>>)this.dictionary).Remove(key);
+            var result = ((IDictionary<TKey, Lazy<TValue>>)this.dictionary).Remove(key);
+            RemoveLocker(key);
+            return result;
         }
 
         public bool TryGetValue(TKey key, out TValue value)
@@ -188,6 +191,26 @@ namespace Dao.ConcurrentDictionaryLazy
             return this.asyncLockers.GetOrAdd(key, k => new SemaphoreSlim(1, 1));
         }
 
+        void RemoveLocker(TKey key)
+        {
+            if (!this.asyncLockers.TryGetValue(key, out var value))
+                return;
+
+            value.Dispose();
+            ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
+        }
+
+        void ClearLockers()
+        {
+            var keys = this.asyncLockers.Keys;
+            foreach (var key in keys)
+            {
+                RemoveLocker(key);
+            }
+
+            this.asyncLockers.Clear();
+        }
+
         #endregion
 
         public bool TryAdd(TKey key, TValue value)
@@ -200,6 +223,9 @@ namespace Dao.ConcurrentDictionaryLazy
             return this.dictionary.TryAdd(key, NewValue(key, valueFactory));
         }
 
+        /// <summary>
+        /// [Attention] Require Dispose action only if this method had been called.
+        /// </summary>
         public bool TryUpdate(TKey key, TValue newValue, TValue comparisonValue)
         {
             var locker = GetLocker(key);
@@ -220,6 +246,9 @@ namespace Dao.ConcurrentDictionaryLazy
             }
         }
 
+        /// <summary>
+        /// [Attention] Require Dispose action only if this method had been called.
+        /// </summary>
         public bool TryUpdate(TKey key, Func<TKey, TValue> newValueFactory, TValue comparisonValue)
         {
             var locker = GetLocker(key);
@@ -244,6 +273,7 @@ namespace Dao.ConcurrentDictionaryLazy
         {
             var result = this.dictionary.TryRemove(key, out var lazy);
             value = CheckValue(lazy);
+            RemoveLocker(key);
             return result;
         }
 
@@ -257,6 +287,9 @@ namespace Dao.ConcurrentDictionaryLazy
             return this.dictionary.GetOrAdd(key, k => NewValue(k, valueFactory)).Value;
         }
 
+        /// <summary>
+        /// [Attention] Require Dispose action only if this method had been called.
+        /// </summary>
         public async Task<TValue> GetOrAddAsync(TKey key, Func<TKey, Task<TValue>> valueFactory)
         {
             var locker = GetLocker(key);
@@ -387,6 +420,7 @@ namespace Dao.ConcurrentDictionaryLazy
         void IDictionary.Remove(object key)
         {
             ((IDictionary)this.dictionary).Remove(key);
+            RemoveLocker((TKey)key);
         }
 
         bool IDictionary.IsFixedSize => ((IDictionary)this.dictionary).IsFixedSize;
@@ -533,17 +567,7 @@ namespace Dao.ConcurrentDictionaryLazy
                     {
                         if (this.asyncLockers != null)
                         {
-                            var keys = this.asyncLockers.Keys;
-                            foreach (var key in keys)
-                            {
-                                if (!this.asyncLockers.TryGetValue(key, out var value))
-                                    continue;
-
-                                value.Dispose();
-                                ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
-                            }
-
-                            this.asyncLockers.Clear();
+                            ClearLockers();
                             this.asyncLockers = null;
                         }
                     }

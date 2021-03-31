@@ -193,22 +193,25 @@ namespace Dao.ConcurrentDictionaryLazy
 
         void RemoveLocker(TKey key)
         {
-            if (!this.asyncLockers.TryGetValue(key, out var value))
-                return;
-
-            value.Dispose();
-            ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
+            if (this.asyncLockers != null && this.asyncLockers.TryGetValue(key, out var value))
+            {
+                value.Dispose();
+                ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
+            }
         }
 
         void ClearLockers()
         {
-            var keys = this.asyncLockers.Keys;
-            foreach (var key in keys)
+            if (this.asyncLockers != null)
             {
-                RemoveLocker(key);
-            }
+                var keys = this.asyncLockers.Keys;
+                foreach (var key in keys)
+                {
+                    RemoveLocker(key);
+                }
 
-            this.asyncLockers.Clear();
+                this.asyncLockers.Clear();
+            }
         }
 
         #endregion

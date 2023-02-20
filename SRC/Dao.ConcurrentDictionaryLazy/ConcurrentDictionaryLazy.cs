@@ -293,7 +293,7 @@ namespace Dao.ConcurrentDictionaryLazy
         public async Task<TValue> GetOrAddAsync(TKey key, Func<TKey, Task<TValue>> valueFactory)
         {
             var locker = GetLocker(key);
-            await locker.WaitAsync();
+            await locker.WaitAsync().ConfigureAwait(false);
 
             try
             {
@@ -303,7 +303,7 @@ namespace Dao.ConcurrentDictionaryLazy
                 if (valueFactory == null)
                     throw new ArgumentNullException(nameof(valueFactory));
 
-                var value = await valueFactory(key);
+                var value = await valueFactory(key).ConfigureAwait(false);
                 return GetOrAdd(key, value);
             }
             finally
@@ -544,7 +544,7 @@ namespace Dao.ConcurrentDictionaryLazy
 
         #endregion
 
-        #region Dispose
+        #region IDisposable
 
         bool disposed;
 

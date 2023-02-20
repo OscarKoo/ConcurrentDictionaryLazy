@@ -193,11 +193,8 @@ namespace Dao.ConcurrentDictionaryLazy
 
         void RemoveLocker(TKey key)
         {
-            if (this.asyncLockers != null && this.asyncLockers.TryGetValue(key, out var value))
-            {
+            if (this.asyncLockers != null && this.asyncLockers.TryRemove(key, out var value))
                 value.Dispose();
-                ((IDictionary<TKey, SemaphoreSlim>)this.asyncLockers).Remove(key);
-            }
         }
 
         void ClearLockers()
@@ -547,7 +544,7 @@ namespace Dao.ConcurrentDictionaryLazy
 
         #endregion
 
-        #region MyRegion
+        #region Dispose
 
         bool disposed;
 

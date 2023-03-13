@@ -5,6 +5,8 @@ VisualStudioVersion = 15.0.28307.757
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Dao.ConcurrentDictionaryLazy", "Dao.ConcurrentDictionaryLazy\Dao.ConcurrentDictionaryLazy.csproj", "{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dao.ConcurrentDictionaryLazyAsync", "Dao.ConcurrentDictionaryLazyAsync\Dao.ConcurrentDictionaryLazyAsync.csproj", "{4927BD17-2598-4A9F-883A-26789E8297EA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1993AA7F-F6C5-46EC-8AF4-497F6E61C670}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4927BD17-2598-4A9F-883A-26789E8297EA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4927BD17-2598-4A9F-883A-26789E8297EA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4927BD17-2598-4A9F-883A-26789E8297EA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4927BD17-2598-4A9F-883A-26789E8297EA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

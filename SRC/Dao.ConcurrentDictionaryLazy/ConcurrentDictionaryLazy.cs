@@ -4,361 +4,192 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Dao.ConcurrentDictionaryLazy
 {
     [Serializable]
-    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>, IDisposable
+    public class ConcurrentDictionaryLazy<TKey, TValue> : IDictionary<TKey, TValue>, IReadOnlyDictionary<TKey, TValue>, IDictionary
     {
+        #region dictionary
+
+        protected readonly ConcurrentDictionary<TKey, Lazy<TValue>> dictionary;
+
+        IDictionary AsDictionary => this.dictionary;
+        ICollection AsCollection => this.dictionary;
+        IDictionary<TKey, Lazy<TValue>> AsDictionaryKeyValue => this.dictionary;
+        ICollection<KeyValuePair<TKey, Lazy<TValue>>> AsCollectionKeyValue => this.dictionary;
+
+        #endregion
+
+        #region Constructor
+
         static readonly int processCount = Environment.ProcessorCount;
         static readonly IEqualityComparer<TKey> defaultComparer = EqualityComparer<TKey>.Default;
         readonly IEqualityComparer<TKey> comparer;
 
-        readonly ConcurrentDictionary<TKey, Lazy<TValue>> dictionary;
+        public ConcurrentDictionaryLazy()
+            : this(null) { }
 
-        readonly object syncObj = new object();
-        ConcurrentDictionary<TKey, SemaphoreSlim> asyncLockers;
+        public ConcurrentDictionaryLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null)
+            : this(0, collection, comparer) { }
 
-        #region Constructor
+        public ConcurrentDictionaryLazy(IEqualityComparer<TKey> comparer)
+            : this(0, comparer: comparer) { }
 
-        public ConcurrentDictionaryLazy() : this(null) { }
-
-        public ConcurrentDictionaryLazy(IEqualityComparer<TKey> comparer) : this(0, comparer: comparer) { }
-
-        public ConcurrentDictionaryLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null) : this(0, collection, comparer) { }
-
-        public ConcurrentDictionaryLazy(int concurrencyLevel, IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null)
-        {
+        public ConcurrentDictionaryLazy(int concurrencyLevel, IEnumerable<KeyValuePair<TKey, TValue>> collection, IEqualityComparer<TKey> comparer = null) =>
             this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, ConvertToLazy(collection), this.comparer = comparer ?? defaultComparer);
-        }
 
-        public ConcurrentDictionaryLazy(int concurrencyLevel, int capacity = 31, IEqualityComparer<TKey> comparer = null)
-        {
+        public ConcurrentDictionaryLazy(int concurrencyLevel, int capacity = 31, IEqualityComparer<TKey> comparer = null) =>
             this.dictionary = new ConcurrentDictionary<TKey, Lazy<TValue>>(concurrencyLevel <= 0 ? processCount : concurrencyLevel, capacity, this.comparer = comparer ?? defaultComparer);
-        }
 
-        static IEnumerable<KeyValuePair<TKey, Lazy<TValue>>> ConvertToLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection)
-        {
-            return collection.Select(s => new KeyValuePair<TKey, Lazy<TValue>>(s.Key, NewValue(s.Value)));
-        }
+        static IEnumerable<KeyValuePair<TKey, Lazy<TValue>>> ConvertToLazy(IEnumerable<KeyValuePair<TKey, TValue>> collection) =>
+            collection.Select(s => new KeyValuePair<TKey, Lazy<TValue>>(s.Key, LazyValue(s.Value)));
 
         #endregion
 
-        static Lazy<TValue> NewValue(TValue value)
+        #region LazyValue
+
+        static Lazy<TValue> LazyValue(TValue value) => new Lazy<TValue>(() => value);
+
+        Lazy<TValue> LazyValue(TKey key, Func<TKey, TValue> valueFactory) => new Lazy<TValue>(() =>
         {
-            return new Lazy<TValue>(() => value);
-        }
+            try
+            {
+                return valueFactory(key);
+            }
+            catch (Exception)
+            {
+                Remove(key);
+                throw;
+            }
+        });
 
-        static Lazy<TValue> NewValue(TKey key, Func<TKey, TValue> addValueFactory)
+        Func<TKey, Lazy<TValue>> LazyValue(Func<TKey, TValue> valueFactory) => k => LazyValue(k, valueFactory);
+
+        Lazy<TValue> LazyValue(TKey key, Lazy<TValue> comparisonValue, Func<TKey, TValue, TValue> updateValueFactory) => new Lazy<TValue>(() =>
         {
-            if (addValueFactory == null)
-                throw new ArgumentNullException(nameof(addValueFactory));
+            try
+            {
+                return updateValueFactory(key, comparisonValue.Value);
+            }
+            catch (Exception)
+            {
+                Remove(key);
+                throw;
+            }
+        });
 
-            return new Lazy<TValue>(() => addValueFactory(key));
-        }
+        Func<TKey, Lazy<TValue>, Lazy<TValue>> LazyValue(Func<TKey, TValue, TValue> updateValueFactory) =>
+            (k, comparisonValue) => LazyValue(k, comparisonValue, updateValueFactory);
 
-        static Lazy<TValue> NewValue(TKey key, Lazy<TValue> value, Func<TKey, TValue, TValue> updateValueFactory)
-        {
-            if (updateValueFactory == null)
-                throw new ArgumentNullException(nameof(updateValueFactory));
+        #endregion
 
-            return new Lazy<TValue>(() => updateValueFactory(key, value.Value));
-        }
+        #region Interfaces
 
-        static Lazy<TValue> NewValue(TKey key, Lazy<TValue> value, Action<TKey, TValue> updateValueFactory)
-        {
-            if (updateValueFactory == null)
-                throw new ArgumentNullException(nameof(updateValueFactory));
-
-            updateValueFactory(key, value.Value);
-            return value;
-        }
-
-        static TValue CheckValue(Lazy<TValue> value)
-        {
-            return value == null ? default(TValue) : value.Value;
-        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         #region IDictionary<TKey, TValue>
 
-        public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
-        {
-            foreach (var kv in this.dictionary)
-            {
-                yield return new KeyValuePair<TKey, TValue>(kv.Key, kv.Value.Value);
-            }
-        }
+        void ICollection<KeyValuePair<TKey, TValue>>.Add(KeyValuePair<TKey, TValue> item) => ((IDictionary<TKey, TValue>)this).Add(item.Key, item.Value);
 
-        IEnumerator IEnumerable.GetEnumerator()
-        {
-            return GetEnumerator();
-        }
+        bool ICollection<KeyValuePair<TKey, TValue>>.Contains(KeyValuePair<TKey, TValue> item) =>
+            TryGetValue(item.Key, out var value) && EqualityComparer<TValue>.Default.Equals(value, item.Value);
 
-        void ICollection<KeyValuePair<TKey, TValue>>.Add(KeyValuePair<TKey, TValue> item)
-        {
-            ((IDictionary<TKey, TValue>)this).Add(item.Key, item.Value);
-        }
-
-        public void Clear()
-        {
-            this.dictionary.Clear();
-            ClearLockers();
-        }
-
-        bool ICollection<KeyValuePair<TKey, TValue>>.Contains(KeyValuePair<TKey, TValue> item)
-        {
-            return TryGetValue(item.Key, out var value) && EqualityComparer<TValue>.Default.Equals(value, item.Value);
-        }
-
-        void ICollection<KeyValuePair<TKey, TValue>>.CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex)
+        void CopyTo<T>(T[] array, int index, Func<TKey, TValue, T> convertor)
         {
             if (array == null)
                 throw new ArgumentNullException(nameof(array));
 
-            var items = new KeyValuePair<TKey, Lazy<TValue>>[array.Length];
+            var tempArray = new object[array.Length];
 
-            for (var i = arrayIndex; i < array.Length; i++)
+            AsCollection.CopyTo(tempArray, index);
+
+            for (var i = index; i < tempArray.Length; i++)
             {
                 var current = array[i];
-                items[i] = new KeyValuePair<TKey, Lazy<TValue>>(current.Key, NewValue(current.Value));
-            }
+                if (!(current is KeyValuePair<TKey, Lazy<TValue>> kv))
+                    continue;
 
-            ((ICollection<KeyValuePair<TKey, Lazy<TValue>>>)this.dictionary).CopyTo(items, arrayIndex);
-
-            for (var i = arrayIndex; i < items.Length; i++)
-            {
-                var current = items[i];
-                array[i] = new KeyValuePair<TKey, TValue>(current.Key, current.Value.Value);
+                array[i] = convertor(kv.Key, kv.Value.Value);
             }
         }
 
-        bool ICollection<KeyValuePair<TKey, TValue>>.Remove(KeyValuePair<TKey, TValue> item)
-        {
-            return Remove(item.Key);
-        }
+        void ICollection<KeyValuePair<TKey, TValue>>.CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex) =>
+            CopyTo(array, arrayIndex, (k, v) => new KeyValuePair<TKey, TValue>(k, v));
 
-        public int Count => this.dictionary.Count;
+        bool ICollection<KeyValuePair<TKey, TValue>>.Remove(KeyValuePair<TKey, TValue> item) => Remove(item.Key);
 
-        bool ICollection<KeyValuePair<TKey, TValue>>.IsReadOnly => ((ICollection<KeyValuePair<TKey, Lazy<TValue>>>)this.dictionary).IsReadOnly;
+        bool ICollection<KeyValuePair<TKey, TValue>>.IsReadOnly => AsCollectionKeyValue.IsReadOnly;
 
-        void IDictionary<TKey, TValue>.Add(TKey key, TValue value)
-        {
-            ((IDictionary<TKey, Lazy<TValue>>)this.dictionary).Add(key, NewValue(value));
-        }
-
-        public bool ContainsKey(TKey key)
-        {
-            return this.dictionary.ContainsKey(key);
-        }
-
-        public bool Remove(TKey key)
-        {
-            var result = ((IDictionary<TKey, Lazy<TValue>>)this.dictionary).Remove(key);
-            RemoveLocker(key);
-            return result;
-        }
-
-        public bool TryGetValue(TKey key, out TValue value)
-        {
-            var result = this.dictionary.TryGetValue(key, out var lazy);
-            value = CheckValue(lazy);
-            return result;
-        }
-
-        public TValue this[TKey key]
-        {
-            get => this.dictionary[key].Value;
-            set => this.dictionary[key] = NewValue(value);
-        }
-
-        public ICollection<TKey> Keys => this.dictionary.Keys;
-
-        public ICollection<TValue> Values => new ReadOnlyCollection<TValue>(this.dictionary.Values.Select(s => s.Value).ToList());
+        void IDictionary<TKey, TValue>.Add(TKey key, TValue value) => AsDictionaryKeyValue.Add(key, LazyValue(value));
 
         #endregion
 
-        #region ThreadSafe
+        #region IReadOnlyDictionary<TKey, TValue>
 
-        SemaphoreSlim GetLocker(TKey key)
-        {
-            if (this.asyncLockers == null)
-                lock (this.syncObj)
-                    if (this.asyncLockers == null)
-                        this.asyncLockers = new ConcurrentDictionary<TKey, SemaphoreSlim>(this.comparer);
-
-            return this.asyncLockers.GetOrAdd(key, k => new SemaphoreSlim(1, 1));
-        }
-
-        void RemoveLocker(TKey key)
-        {
-            if (this.asyncLockers != null && this.asyncLockers.TryRemove(key, out var value))
-                value.Dispose();
-        }
-
-        void ClearLockers()
-        {
-            if (this.asyncLockers != null)
-            {
-                var keys = this.asyncLockers.Keys;
-                foreach (var key in keys)
-                {
-                    RemoveLocker(key);
-                }
-
-                this.asyncLockers.Clear();
-            }
-        }
+        IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => Keys;
+        IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => Values;
 
         #endregion
 
-        public bool TryAdd(TKey key, TValue value)
+        #region IDictionary
+
+        void IDictionary.Add(object key, object value) => AsDictionary.Add(key, LazyValue((TValue)value));
+
+        bool IDictionary.Contains(object key) => AsDictionary.Contains(key);
+
+        IDictionaryEnumerator IDictionary.GetEnumerator() => new DictionaryEnumerator(this);
+
+        void IDictionary.Remove(object key) => AsDictionary.Remove(key);
+
+        bool IDictionary.IsFixedSize => AsDictionary.IsFixedSize;
+        bool IDictionary.IsReadOnly => AsDictionary.IsReadOnly;
+        object IDictionary.this[object key]
         {
-            return this.dictionary.TryAdd(key, NewValue(value));
+            get => ((Lazy<TValue>)AsDictionary[key]).Value;
+            set => AsDictionary[key] = LazyValue((TValue)value);
         }
+        ICollection IDictionary.Keys => (ICollection)Keys;
+        ICollection IDictionary.Values => (ICollection)Values;
 
-        public bool TryAdd(TKey key, Func<TKey, TValue> valueFactory)
+        void ICollection.CopyTo(Array array, int index)
         {
-            return this.dictionary.TryAdd(key, NewValue(key, valueFactory));
-        }
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
 
-        /// <summary>
-        /// [Attention] Require Dispose action only if this method had been called.
-        /// </summary>
-        public bool TryUpdate(TKey key, TValue newValue, TValue comparisonValue)
-        {
-            var locker = GetLocker(key);
-            locker.Wait();
-
-            try
+            switch (array)
             {
-                if (!this.dictionary.TryGetValue(key, out var value)
-                    || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
-                    return false;
+                case KeyValuePair<TKey, TValue>[] target:
+                    CopyTo(target, index, (k, v) => new KeyValuePair<TKey, TValue>(k, v));
+                    break;
 
-                this.dictionary[key] = NewValue(newValue);
-                return true;
-            }
-            finally
-            {
-                locker.Release();
-            }
-        }
+                case DictionaryEntry[] target:
+                    CopyTo(target, index, (k, v) => new DictionaryEntry(k, v));
+                    break;
 
-        /// <summary>
-        /// [Attention] Require Dispose action only if this method had been called.
-        /// </summary>
-        public bool TryUpdate(TKey key, Func<TKey, TValue> newValueFactory, TValue comparisonValue)
-        {
-            var locker = GetLocker(key);
-            locker.Wait();
+                case object[] target:
+                    CopyTo(target, index, (k, v) => v);
+                    break;
 
-            try
-            {
-                if (!this.dictionary.TryGetValue(key, out var value)
-                    || !EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue))
-                    return false;
-
-                this.dictionary[key] = NewValue(key, newValueFactory);
-                return true;
-            }
-            finally
-            {
-                locker.Release();
+                default:
+                    throw new NotSupportedException();
             }
         }
 
-        public bool TryRemove(TKey key, out TValue value)
-        {
-            var result = this.dictionary.TryRemove(key, out var lazy);
-            value = CheckValue(lazy);
-            RemoveLocker(key);
-            return result;
-        }
+        bool ICollection.IsSynchronized => AsCollection.IsSynchronized;
+        object ICollection.SyncRoot => AsCollection.SyncRoot;
 
-        public TValue GetOrAdd(TKey key, TValue value)
-        {
-            return this.dictionary.GetOrAdd(key, NewValue(value)).Value;
-        }
+        #endregion
 
-        public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
-        {
-            return this.dictionary.GetOrAdd(key, k => NewValue(k, valueFactory)).Value;
-        }
-
-        /// <summary>
-        /// [Attention] Require Dispose action only if this method had been called.
-        /// </summary>
-        public async Task<TValue> GetOrAddAsync(TKey key, Func<TKey, Task<TValue>> valueFactory)
-        {
-            var locker = GetLocker(key);
-            await locker.WaitAsync().ConfigureAwait(false);
-
-            try
-            {
-                if (this.dictionary.TryGetValue(key, out var lazy))
-                    return lazy.Value;
-
-                if (valueFactory == null)
-                    throw new ArgumentNullException(nameof(valueFactory));
-
-                var value = await valueFactory(key).ConfigureAwait(false);
-                return GetOrAdd(key, value);
-            }
-            finally
-            {
-                locker.Release();
-            }
-        }
-
-        /// <summary>
-        /// Update will replace existing value
-        /// </summary>
-        public TValue AddOrUpdate(TKey key, TValue addValue, Func<TKey, TValue, TValue> updateValueFactory)
-        {
-            return this.dictionary.AddOrUpdate(key, NewValue(addValue), (k, v) => NewValue(k, v, updateValueFactory)).Value;
-        }
-
-        /// <summary>
-        /// Update will replace existing value
-        /// </summary>
-        public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory)
-        {
-            return this.dictionary.AddOrUpdate(key, k => NewValue(k, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
-        }
-
-        /// <summary>
-        /// Update will update existing reference type value
-        /// </summary>
-        public TValue AddOrUpdate(TKey key, TValue addValue, Action<TKey, TValue> updateValueFactory)
-        {
-            return this.dictionary.AddOrUpdate(key, NewValue(addValue), (k, v) => NewValue(k, v, updateValueFactory)).Value;
-        }
-
-        /// <summary>
-        /// Update will update existing reference type value
-        /// </summary>
-        public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Action<TKey, TValue> updateValueFactory)
-        {
-            return this.dictionary.AddOrUpdate(key, k => NewValue(k, addValueFactory), (k, v) => NewValue(k, v, updateValueFactory)).Value;
-        }
-
-        public KeyValuePair<TKey, TValue>[] ToArray()
-        {
-            return this.dictionary.ToArray().Select(s => new KeyValuePair<TKey, TValue>(s.Key, s.Value.Value)).ToArray();
-        }
+        #endregion
 
         #region DictionaryEnumerator
 
-        sealed class DictionaryEnumerator : IDictionaryEnumerator, IEnumerator
+        class DictionaryEnumerator : IDictionaryEnumerator
         {
             readonly IEnumerator<KeyValuePair<TKey, TValue>> enumerator;
 
-            internal DictionaryEnumerator(ConcurrentDictionaryLazy<TKey, TValue> dictionary)
-            {
-                this.enumerator = dictionary.GetEnumerator();
-            }
+            internal DictionaryEnumerator(ConcurrentDictionaryLazy<TKey, TValue> dictionary) => this.enumerator = dictionary.GetEnumerator();
 
             public DictionaryEntry Entry
             {
@@ -378,203 +209,98 @@ namespace Dao.ConcurrentDictionaryLazy
 
             public object Current => Entry;
 
-            public bool MoveNext()
-            {
-                return this.enumerator.MoveNext();
-            }
+            public bool MoveNext() => this.enumerator.MoveNext();
 
-            public void Reset()
-            {
-                this.enumerator.Reset();
-            }
+            public void Reset() => this.enumerator.Reset();
         }
 
         #endregion
 
-        #region Boxed
+        #region publics
 
-        sealed class Boxed<T>
+        public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator() =>
+            this.dictionary.Select(kv => new KeyValuePair<TKey, TValue>(kv.Key, kv.Value.Value)).GetEnumerator();
+
+        public void Clear() => this.dictionary.Clear();
+
+        public bool Remove(TKey key) => this.dictionary.TryRemove(key, out _);
+
+        public int Count => this.dictionary.Count;
+
+        public bool IsEmpty => this.dictionary.IsEmpty;
+
+        public bool ContainsKey(TKey key) => this.dictionary.ContainsKey(key);
+
+        public TValue this[TKey key]
         {
-            internal Boxed(T value)
-            {
-                Value = value;
-            }
+            get => this.dictionary[key].Value;
+            set => this.dictionary[key] = LazyValue(value);
+        }
 
-            public T Value { get; }
+        public ICollection<TKey> Keys => this.dictionary.Keys;
+
+        public ICollection<TValue> Values => new ReadOnlyCollection<TValue>(this.dictionary.Values.Select(s => s.Value).ToList());
+
+        public KeyValuePair<TKey, TValue>[] ToArray() => this.dictionary.ToArray().Select(s => new KeyValuePair<TKey, TValue>(s.Key, s.Value.Value)).ToArray();
+
+        #endregion
+
+        #region Try
+
+        static TValue GetLazyValue(Lazy<TValue> value) => value == null ? default : value.Value;
+
+        public bool TryAdd(TKey key, TValue value) => this.dictionary.TryAdd(key, LazyValue(value));
+
+        public bool TryAdd(TKey key, Func<TKey, TValue> valueFactory) =>
+            valueFactory == null
+                ? throw new ArgumentNullException(nameof(valueFactory))
+                : this.dictionary.TryAdd(key, LazyValue(key, valueFactory));
+
+        public bool TryGetValue(TKey key, out TValue value)
+        {
+            var result = this.dictionary.TryGetValue(key, out var lazy);
+            value = GetLazyValue(lazy);
+            return result;
+        }
+
+        public bool TryUpdate(TKey key, TValue newValue, TValue comparisonValue) =>
+            this.dictionary.TryGetValue(key, out var value)
+            && EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue)
+            && this.dictionary.TryUpdate(key, LazyValue(newValue), value);
+
+        public bool TryUpdate(TKey key, Func<TKey, TValue> valueFactory, TValue comparisonValue) =>
+            this.dictionary.TryGetValue(key, out var value)
+            && EqualityComparer<TValue>.Default.Equals(value.Value, comparisonValue)
+            && this.dictionary.TryUpdate(key, LazyValue(key, valueFactory), value);
+
+        public bool TryRemove(TKey key, out TValue value)
+        {
+            var result = this.dictionary.TryRemove(key, out var lazy);
+            value = GetLazyValue(lazy);
+            return result;
         }
 
         #endregion
 
-        #region IDictionary
+        #region GetOrAdd
 
-        bool IDictionary.Contains(object key)
-        {
-            return ((IDictionary)this.dictionary).Contains(key);
-        }
+        public TValue GetOrAdd(TKey key, TValue value) => this.dictionary.GetOrAdd(key, LazyValue(value)).Value;
 
-        IDictionaryEnumerator IDictionary.GetEnumerator()
-        {
-            return new DictionaryEnumerator(this);
-        }
-
-        void IDictionary.Remove(object key)
-        {
-            ((IDictionary)this.dictionary).Remove(key);
-            RemoveLocker((TKey)key);
-        }
-
-        bool IDictionary.IsFixedSize => ((IDictionary)this.dictionary).IsFixedSize;
-
-        bool IDictionary.IsReadOnly => ((IDictionary)this.dictionary).IsReadOnly;
-
-        object IDictionary.this[object key]
-        {
-            get => ((Lazy<TValue>)((IDictionary)this.dictionary)[key]).Value;
-            set => ((IDictionary)this.dictionary)[key] = NewValue((TValue)value);
-        }
-
-        void IDictionary.Add(object key, object value)
-        {
-            ((IDictionary)this.dictionary).Add(key, NewValue((TValue)value));
-        }
-
-        void ICollection.CopyTo(Array array, int index)
-        {
-            if (array == null)
-                throw new ArgumentNullException(nameof(array));
-
-            switch (array)
-            {
-                case KeyValuePair<TKey, TValue>[] array1: {
-                    var tmpArray = new KeyValuePair<TKey, Lazy<TValue>>[array.Length];
-
-                    for (var i = index; i < array1.Length; i++)
-                    {
-                        var current = array1[i];
-                        tmpArray[i] = new KeyValuePair<TKey, Lazy<TValue>>(current.Key, NewValue(current.Value));
-                    }
-
-                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
-
-                    for (var i = index; i < tmpArray.Length; i++)
-                    {
-                        var current = tmpArray[i];
-                        array1[i] = new KeyValuePair<TKey, TValue>(current.Key, current.Value.Value);
-                    }
-
-                    break;
-                }
-
-                case DictionaryEntry[] array2: {
-                    var tmpArray = new DictionaryEntry[array.Length];
-
-                    for (var i = index; i < array2.Length; i++)
-                    {
-                        var current = array2[i];
-                        tmpArray[i] = new DictionaryEntry(current.Key, new Boxed<object>(current.Value));
-                    }
-
-                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
-
-                    for (var i = index; i < tmpArray.Length; i++)
-                    {
-                        var current = tmpArray[i];
-                        switch (current.Value)
-                        {
-                            case Lazy<TValue> lazy:
-                                array2[i] = new DictionaryEntry(current.Key, lazy.Value);
-                                break;
-                            case Boxed<object> boxed:
-                                array2[i] = new DictionaryEntry(current.Key, boxed.Value);
-                                break;
-                        }
-                    }
-
-                    break;
-                }
-
-                default: {
-                    var array3 = array as object[];
-                    if (array3 == null)
-                        throw new ArgumentException($"Incorrect Type of {nameof(array)}");
-
-                    var tmpArray = new object[array.Length];
-
-                    for (var i = index; i < array3.Length; i++)
-                    {
-                        tmpArray[i] = new Boxed<object>(array3[i]);
-                    }
-
-                    ((ICollection)this.dictionary).CopyTo(tmpArray, index);
-
-                    for (var i = index; i < tmpArray.Length; i++)
-                    {
-                        var current = tmpArray[i];
-                        switch (current)
-                        {
-                            case KeyValuePair<TKey, Lazy<TValue>> pair:
-                                array3[i] = new KeyValuePair<TKey, TValue>(pair.Key, pair.Value.Value);
-                                break;
-                            case Boxed<object> boxed:
-                                array3[i] = boxed.Value;
-                                break;
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
-
-        bool ICollection.IsSynchronized => ((ICollection)this.dictionary).IsSynchronized;
-
-        object ICollection.SyncRoot => ((ICollection)this.dictionary).SyncRoot;
-
-        ICollection IDictionary.Keys => (ICollection)Keys;
-
-        ICollection IDictionary.Values => (ICollection)Values;
+        public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory) =>
+            valueFactory == null
+                ? throw new ArgumentNullException(nameof(valueFactory))
+                : this.dictionary.GetOrAdd(key, LazyValue(valueFactory)).Value;
 
         #endregion
 
-        #region IReadOnlyDictionary<TKey, TValue>
+        #region AddOrUpdate
 
-        IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => Keys;
+        public TValue AddOrUpdate(TKey key, TValue addValue, Func<TKey, TValue, TValue> updateValueFactory) =>
+            this.dictionary.AddOrUpdate(key, LazyValue(addValue), LazyValue(updateValueFactory)).Value;
 
-        IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => Values;
-
-        #endregion
-
-        #region IDisposable
-
-        bool disposed;
-
-        public void Dispose()
+        public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory)
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        void Dispose(bool disposing)
-        {
-            if (this.disposed)
-                return;
-
-            if (disposing)
-            {
-                if (this.asyncLockers != null)
-                {
-                    lock (this.syncObj)
-                    {
-                        if (this.asyncLockers != null)
-                        {
-                            ClearLockers();
-                            this.asyncLockers = null;
-                        }
-                    }
-                }
-            }
-
-            this.disposed = true;
+            return this.dictionary.AddOrUpdate(key, LazyValue(addValueFactory), LazyValue(updateValueFactory)).Value;
         }
 
         #endregion

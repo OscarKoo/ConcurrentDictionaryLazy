@@ -23,9 +23,9 @@ namespace Dao.ConcurrentDictionaryLazy
 
         #region Constructor
 
-        static readonly int processCount = Environment.ProcessorCount;
+        static readonly int processCount = PlatformHelper.ProcessorCount;
         static readonly IEqualityComparer<TKey> defaultComparer = EqualityComparer<TKey>.Default;
-        readonly IEqualityComparer<TKey> comparer;
+        protected readonly IEqualityComparer<TKey> comparer;
 
         public ConcurrentDictionaryLazy()
             : this(null) { }
@@ -49,7 +49,7 @@ namespace Dao.ConcurrentDictionaryLazy
 
         #region LazyValue
 
-        static Lazy<TValue> LazyValue(TValue value) => new Lazy<TValue>(() => value);
+        protected static Lazy<TValue> LazyValue(TValue value) => new Lazy<TValue>(() => value);
 
         Lazy<TValue> LazyValue(TKey key, Func<TKey, TValue> valueFactory) => new Lazy<TValue>(() =>
         {
@@ -296,13 +296,38 @@ namespace Dao.ConcurrentDictionaryLazy
         #region AddOrUpdate
 
         public TValue AddOrUpdate(TKey key, TValue addValue, Func<TKey, TValue, TValue> updateValueFactory) =>
-            this.dictionary.AddOrUpdate(key, LazyValue(addValue), LazyValue(updateValueFactory)).Value;
+            updateValueFactory == null
+                ? throw new ArgumentNullException(nameof(updateValueFactory))
+                : this.dictionary.AddOrUpdate(key, LazyValue(addValue), LazyValue(updateValueFactory)).Value;
 
-        public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory)
-        {
-            return this.dictionary.AddOrUpdate(key, LazyValue(addValueFactory), LazyValue(updateValueFactory)).Value;
-        }
+        public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory) =>
+            addValueFactory == null
+                ? throw new ArgumentNullException(nameof(addValueFactory))
+                : updateValueFactory == null
+                    ? throw new ArgumentNullException(nameof(updateValueFactory))
+                    : this.dictionary.AddOrUpdate(key, LazyValue(addValueFactory), LazyValue(updateValueFactory)).Value;
 
         #endregion
+    }
+
+    static class PlatformHelper
+    {
+        static volatile int s_processorCount;
+        static volatile int s_lastProcessorCountRefreshTicks;
+
+        internal static int ProcessorCount
+        {
+            get
+            {
+                var tickCount = Environment.TickCount;
+                if (s_processorCount == 0 || tickCount - s_lastProcessorCountRefreshTicks >= 30000)
+                {
+                    s_processorCount = Environment.ProcessorCount;
+                    s_lastProcessorCountRefreshTicks = tickCount;
+                }
+
+                return s_processorCount;
+            }
+        }
     }
 }
